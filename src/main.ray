@@ -1,0 +1,122 @@
+// raybot — a bot framework: websocket gateway client with heartbeats and
+// reconnection, plus a fake local gateway for offline demos.
+import std/time;
+import client;
+import gateway;
+
+fn usage() {
+    eprint("usage:");
+    eprint("  raybot run [--host H] [--port N] [--path /] [--token T] [--db FILE]");
+    eprint("  raybot demo                      (fake gateway + bot, end to end, offline)");
+    eprint("");
+    eprint("  commands: !ping !count !uptime !echo !help (state in SQLite)");
+}
+
+fn flag_value(av: [string], name: string) -> Option<string> {
+    var i = 0;
+    while (i + 1 < av.len()) {
+        if (av[i] == name) {
+            return Option.Some(av[i + 1]);
+        }
+        i = i + 1;
+    }
+    Option.None
+}
+
+fn flag_str(av: [string], name: string, fallback: string) -> string {
+    match (flag_value(av, name)) {
+        Option.Some(s) => s,
+        Option.None => fallback,
+    }
+}
+
+fn flag_int(av: [string], name: string, fallback: int) -> int {
+    match (flag_value(av, name)) {
+        Option.Some(s) => {
+            match (parse_int(s)) {
+                Option.Some(n) => n,
+                Option.None => fallback,
+            }
+        },
+        Option.None => fallback,
+    }
+}
+
+fn main() -> int {
+    let av = args();
+    if (av.len() < 1 || av[0] == "--help" || av[0] == "-h") {
+        usage();
+        return if (av.len() < 1) { 1 } else { 0 };
+    }
+    if (av[0] == "run") {
+        let opts = client.RunOpts {
+            host: flag_str(av, "--host", "127.0.0.1"),
+            port: flag_int(av, "--port", 7470),
+            path: flag_str(av, "--path", "/"),
+            token: flag_str(av, "--token", "dev-token"),
+            db_path: flag_str(av, "--db", "./raybot.db"),
+            max_dispatches: flag_int(av, "--max", 0)
+        };
+        match (client.run(
+    opts
+)) {
+            Result.Ok(st) => {
+                eprint(
+                    "raybot: done (" + to_string(st.dispatches) + " dispatches, " + to_string(st.heartbeats) + " heartbeats)"
+                );
+                0
+            },
+            Result.Err(e) => {
+                eprint("raybot: " + e);
+                1
+            },
+        }
+    } else if (av[0] == "demo") {
+        let script = [
+            gateway.Scripted { channel: "general", author: "ana", content: "!ping", delay_ms: 100 },
+            gateway.Scripted { channel: "general", author: "ana", content: "!count", delay_ms: 100 },
+            gateway.Scripted { channel: "general", author: "eva", content: "!count", delay_ms: 100 },
+            gateway.Scripted {
+                channel: "general",
+                author: "eva",
+                content: "!echo hola bot",
+                delay_ms: 100
+            }
+        ];
+        let gw = match (gateway.start(0, 300, script, 0)) {
+            Result.Ok(g) => g,
+            Result.Err(e) => {
+                eprint("raybot: " + e);
+                return 1;
+            },
+        };
+        spawn(fn() {
+            client.run(
+                client.RunOpts {
+                    host: "127.0.0.1",
+                    port: gw.port,
+                    path: "/",
+                    token: "demo",
+                    db_path: "/tmp/raybot-demo.db",
+                    max_dispatches: 4
+                }
+            );
+        });
+        var got = 0;
+        while (got < 4) {
+            match (recv(gw.replies)) {
+                Option.Some(line) => {
+                    print("bot> " + line);
+                    got = got + 1;
+                },
+                Option.None => {
+                    got = 4;
+                },
+            }
+        }
+        0
+    } else {
+        usage();
+        1
+    }
+}

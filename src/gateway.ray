@@ -1,0 +1,164 @@
+// raybot — the FAKE gateway: a websocket server (net/websocket, server side)
+// speaking the same Discord-shaped protocol, for tests and offline demos.
+// After IDENTIFY it replays a script of messages and records every bot reply
+// into a channel the caller can inspect.
+import std/net;
+import std/time;
+import std/json;
+import net/websocket;
+import proto;
+
+pub struct Scripted {
+    channel: string,
+    author: string,
+    content: string,
+    delay_ms: int,
+}
+
+pub struct Gateway {
+    port: int,
+    replies: Channel<string>,
+    identified: Channel<string>,
+}
+
+fn read_upgrade(h: int) -> Result<string, string> {
+    var buf = b"";
+    while (true) {
+        match (from_utf8(buf)) {
+            Result.Ok(s) => {
+                if (s.contains("\r\n\r\n")) {
+                    return Result.Ok(s);
+                }
+            },
+            Result.Err(e) => { },
+        }
+        let chunk = net.socket_read_bytes(h)?;
+        if (chunk.len() == 0) {
+            return Result.Err("closed during handshake");
+        }
+        buf = buf + chunk;
+    }
+    Result.Err("unreachable")
+}
+
+fn send_text_frame(h: int, text: string) {
+    net.socket_write_bytes(h, websocket.encode_text(text));
+}
+
+pub fn start(
+    port: int,
+    heartbeat_ms: int,
+    script: [Scripted],
+    close_after: int
+) -> Result<Gateway, string> {
+    let listener = net.tcp_listen("127.0.0.1", port)?;
+    let actual = net.local_port(listener);
+    let replies: Channel<string> = Channel.bounded(64);
+    let identified: Channel<string> = Channel.bounded(8);
+    spawn(fn() {
+        var accepting = true;
+        while (accepting) {
+            match (net.tcp_accept(listener)) {
+                Result.Err(e) => {
+                    accepting = false;
+                },
+                Result.Ok(h) => {
+                    spawn(fn() {
+                        serve_conn(h, heartbeat_ms, script, close_after, replies, identified);
+                    });
+                },
+            }
+        }
+    });
+    Result.Ok(Gateway { port: actual, replies: replies, identified: identified })
+}
+
+fn serve_conn(
+    h: int,
+    heartbeat_ms: int,
+    script: [Scripted],
+    close_after: int,
+    replies: Channel<string>,
+    identified: Channel<string>
+) {
+    match (read_upgrade(h)) {
+        Result.Err(e) => {
+            close(h);
+            return;
+        },
+        Result.Ok(request) => {
+            let key = websocket.extract_key(request);
+            net.socket_write_bytes(h, websocket.handshake_response(key).to_bytes());
+        },
+    }
+    let ws = websocket.server_conn(h);
+    send_text_frame(h, proto.hello(heartbeat_ms));
+    var seq = 0;
+    var running = true;
+    while (running) {
+        match (websocket.read_message(
+        ws
+    )) {
+            Result.Err(e) => {
+                running = false;
+            },
+            Result.Ok(frame) => {
+                if (frame.opcode == websocket.op_close()) {
+                    running = false;
+                } else if (frame.opcode == websocket.op_text()) {
+                    let text = match (from_utf8(frame.payload)) {
+                        Result.Ok(s) => s,
+                        Result.Err(e) => "",
+                    };
+                    match (proto.parse_frame(
+                text
+            )) {
+                        Option.None => { },
+                        Option.Some(f) => {
+                            if (f.op == 2) {
+                                send(identified, proto.d_string(f.d, "token"));
+                                send_text_frame(h, proto.dispatch("READY", 0, std_null()));
+                                // Replay the script in its own fiber so the
+                                // read loop keeps ACKing heartbeats.
+                                spawn(fn() {
+                                    var s = 0;
+                                    for item in script {
+                                        time.sleep(item.delay_ms);
+                                        s = s + 1;
+                                        send_text_frame(
+                                            h,
+                                            proto.message_create(
+                                                s,
+                                                item.channel,
+                                                item.author,
+                                                item.content
+                                            )
+                                        );
+                                        if (close_after > 0 && s >= close_after) {
+                                            // Simulated gateway drop: the bot
+                                            // must reconnect and re-identify.
+                                            time.sleep(80);
+                                            close(h);
+                                        }
+                                    }
+                                });
+                            } else if (f.op == 1) {
+                                send_text_frame(h, proto.ack());
+                            } else if (f.op == 100) {
+                                send(
+                                    replies,
+                                    proto.d_string(f.d, "channel") + "\t" + proto.d_string(f.d, "content")
+                                );
+                            }
+                        },
+                    }
+                }
+            },
+        }
+    }
+    close(h);
+}
+
+fn std_null() -> json.Json {
+    json.Json.JNull
+}

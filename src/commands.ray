@@ -1,0 +1,72 @@
+// raybot — the command layer: "!name args" → reply text, with per-channel
+// state in SQLite (a bot that forgets on restart is a toy).
+import std/time;
+import db/sqlite;
+
+pub struct Bot {
+    db: sqlite.Conn,
+    started_ms: int,
+}
+
+pub fn new_bot(db_path: string) -> Result<Bot, string> {
+    let conn = sqlite.connect(db_path)?;
+    sqlite.exec(
+        conn,
+        "CREATE TABLE IF NOT EXISTS counters (channel TEXT PRIMARY KEY, n INTEGER)",
+        []
+    )?;
+    Result.Ok(Bot { db: conn, started_ms: time.monotonic() })
+}
+
+fn bump(b: Bot, channel: string) -> int {
+    sqlite.exec(
+        b.db,
+        "INSERT INTO counters (channel, n) VALUES (?1, 1) ON CONFLICT(channel) DO UPDATE SET n = n + 1",
+        [channel]
+    );
+    match (sqlite.query(b.db, "SELECT n FROM counters WHERE channel = ?1", [channel])) {
+        Result.Ok(rows) => {
+            if (rows.len() > 0 && rows[0].len() > 0) {
+                match (parse_int(rows[0][0])) {
+                    Option.Some(n) => n,
+                    Option.None => 0,
+                }
+            } else {
+                0
+            }
+        },
+        Result.Err(e) => 0,
+    }
+}
+
+// A command reply, or None for ordinary chatter.
+pub fn handle(b: Bot, channel: string, author: string, content: string) -> Option<string> {
+    if (!content.starts_with("!")) {
+        return Option.None;
+    }
+    let parts = content.substring(1, content.len()).trim().split(" ");
+    if (parts.len() == 0) {
+        return Option.None;
+    }
+    let cmd = parts[0];
+    if (cmd == "ping") {
+        Option.Some("pong")
+    } else if (cmd == "count") {
+        Option.Some(author + ": " + to_string(bump(b, channel)))
+    } else if (cmd == "uptime") {
+        let secs = (time.monotonic() - b.started_ms) / 1000;
+        Option.Some("up " + to_string(secs) + " s")
+    } else if (cmd == "echo") {
+        var rest = "";
+        var i = 1;
+        while (i < parts.len()) {
+            rest = if (rest == "") { parts[i] } else { rest + " " + parts[i] };
+            i = i + 1;
+        }
+        Option.Some(rest)
+    } else if (cmd == "help") {
+        Option.Some("!ping · !count · !uptime · !echo TEXT · !help")
+    } else {
+        Option.Some("comando desconocido: !" + cmd + " (prueba !help)")
+    }
+}

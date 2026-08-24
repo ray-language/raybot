@@ -1,0 +1,106 @@
+// raybot — the gateway wire protocol (Discord-shaped JSON over websocket).
+//
+// op 10 HELLO {heartbeat_interval} · op 2 IDENTIFY {token} · op 1 HEARTBEAT
+// (seq) · op 11 ACK · op 0 DISPATCH {t, s, d} · op 100 REPLY (local-mode
+// extension: against real Discord replies go through the REST API, out of v1).
+import std/json;
+from std/json import Json;
+
+pub struct Incoming {
+    op: int,
+    t: string,
+    seq: int,
+    d: Json,
+}
+
+pub fn parse_frame(text: string) -> Option<Incoming> {
+    match (json.parse(text)) {
+        Result.Err(e) => Option.None,
+        Result.Ok(j) => {
+            let op = match (json.get_int(j, "op")) {
+                Option.Some(n) => n,
+                Option.None => {
+                    return Option.None;
+                },
+            };
+            let t = match (json.get_string(j, "t")) {
+                Option.Some(s) => s,
+                Option.None => "",
+            };
+            let seq = match (json.get_int(j, "s")) {
+                Option.Some(n) => n,
+                Option.None => 0,
+            };
+            let d = match (json.member(j, "d")) {
+                Option.Some(x) => x,
+                Option.None => Json.JNull,
+            };
+            Option.Some(Incoming { op: op, t: t, seq: seq, d: d })
+        },
+    }
+}
+
+fn wrap(op: int, d: Json) -> string {
+    var m: Map<string, Json> = Map.new();
+    m.insert("op", Json.JNum(op as float));
+    m.insert("d", d);
+    json.stringify(Json.JObject(m))
+}
+
+pub fn hello(interval_ms: int) -> string {
+    var d: Map<string, Json> = Map.new();
+    d.insert("heartbeat_interval", Json.JNum(interval_ms as float));
+    wrap(10, Json.JObject(d))
+}
+
+pub fn identify(token: string) -> string {
+    var d: Map<string, Json> = Map.new();
+    d.insert("token", Json.JStr(token));
+    wrap(2, Json.JObject(d))
+}
+
+pub fn heartbeat(seq: int) -> string {
+    wrap(1, Json.JNum(seq as float))
+}
+
+pub fn ack() -> string {
+    wrap(11, Json.JNull)
+}
+
+pub fn dispatch(t: string, seq: int, d: Json) -> string {
+    var m: Map<string, Json> = Map.new();
+    m.insert("op", Json.JNum(0.0));
+    m.insert("t", Json.JStr(t));
+    m.insert("s", Json.JNum(seq as float));
+    m.insert("d", d);
+    json.stringify(Json.JObject(m))
+}
+
+pub fn message_create(seq: int, channel: string, author: string, content: string) -> string {
+    var d: Map<string, Json> = Map.new();
+    d.insert("channel", Json.JStr(channel));
+    d.insert("author", Json.JStr(author));
+    d.insert("content", Json.JStr(content));
+    dispatch("MESSAGE_CREATE", seq, Json.JObject(d))
+}
+
+pub fn reply(channel: string, content: string) -> string {
+    var d: Map<string, Json> = Map.new();
+    d.insert("channel", Json.JStr(channel));
+    d.insert("content", Json.JStr(content));
+    wrap(100, Json.JObject(d))
+}
+
+pub fn d_string(d: Json, key: string) -> string {
+    match (json.get_string(d, key)) {
+        Option.Some(s) => s,
+        Option.None => "",
+    }
+}
+
+pub fn d_int(d: Json, key: string) -> int {
+    match (json.get_int(d, key)) {
+        Option.Some(n) => n,
+        Option.None => 0,
+    }
+}

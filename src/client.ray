@@ -1,0 +1,178 @@
+// raybot — the gateway client: the days-long connection the catalog wanted.
+//
+// One event channel multiplexes everything (select needs same-typed channels
+// and there is no try_recv — the rayrelay finding): a reader fiber pushes
+// incoming frames, a heartbeat fiber pushes ticks stamped with a connection
+// GENERATION (a tick from a dead connection is ignored — stale heartbeat
+// fibers from before a reconnect keep ticking harmlessly), and the main loop
+// owns every socket WRITE. Reconnection: exponential backoff with a cap.
+import std/time;
+import std/json;
+from std/json import Json;
+import net/websocket;
+import net/websocket_client;
+import proto;
+import commands;
+
+pub enum Ev {
+    In(int, string),
+    Tick(int),
+    Closed(int),
+}
+
+pub struct RunStats {
+    dispatches: int,
+    heartbeats: int,
+    reconnects: int,
+}
+
+pub struct RunOpts {
+    host: string,
+    port: int,
+    path: string,
+    token: string,
+    db_path: string,
+    max_dispatches: int,
+}
+
+fn spawn_reader(ws: websocket.WsConn, events: Channel<Ev>, gen: int) {
+    spawn(fn() {
+        var running = true;
+        while (running) {
+            match (websocket_client.recv_text(ws)) {
+                Result.Ok(text) => {
+                    send(events, Ev.In(gen, text));
+                },
+                Result.Err(e) => {
+                    running = false;
+                },
+            }
+        }
+        send(events, Ev.Closed(gen));
+    });
+}
+
+fn spawn_heartbeat(events: Channel<Ev>, gen: int, interval_ms: int) {
+    spawn(fn() {
+        var beating = true;
+        while (beating) {
+            time.sleep(interval_ms);
+            send(events, Ev.Tick(gen));
+        }
+    });
+}
+
+// Runs the bot until max_dispatches messages have been handled (0 = forever).
+pub fn run(opts: RunOpts) -> Result<RunStats, string> {
+    let bot = commands.new_bot(opts.db_path)?;
+    let events: Channel<Ev> = Channel.bounded(64);
+    var stats = RunStats { dispatches: 0, heartbeats: 0, reconnects: 0 };
+    var gen = 0;
+    var backoff = 500;
+    var running = true;
+    while (running) {
+        gen = gen + 1;
+        match (websocket_client.connect(
+        opts.host,
+        opts.port,
+        opts.path
+    )) {
+            Result.Err(e) => {
+                eprint(
+                    "raybot: connect failed (" + e + "), retrying in " + to_string(backoff) + " ms"
+                );
+                time.sleep(backoff);
+                backoff = if (backoff * 2 > 15000) { 15000 } else { backoff * 2 };
+                stats.reconnects = stats.reconnects + 1;
+            },
+            Result.Ok(ws) => {
+                backoff = 500;
+                spawn_reader(ws, events, gen);
+                var seq = 0;
+                var connected = true;
+                var identified = false;
+                while (connected && running) {
+                    match (recv(
+                    events
+                )) {
+                        Option.None => {
+                            connected = false;
+                            running = false;
+                        },
+                        Option.Some(ev) => {
+                            match (ev) {
+                                Ev.Closed(g) => {
+                                    if (g == gen) {
+                                        eprint("raybot: connection lost, reconnecting");
+                                        stats.reconnects = stats.reconnects + 1;
+                                        connected = false;
+                                    }
+                                },
+                                Ev.Tick(g) => {
+                                    if (g == gen) {
+                                        websocket_client.send_text(ws, proto.heartbeat(seq));
+                                        stats.heartbeats = stats.heartbeats + 1;
+                                    }
+                                },
+                                Ev.In(g, text) => {
+                                    if (g == gen) {
+                                        match (proto.parse_frame(
+                                    text
+                                )) {
+                                            Option.None => { },
+                                            Option.Some(f) => {
+                                                if (f.op == 10) {
+                                                    let interval = proto.d_int(
+                                                        f.d,
+                                                        "heartbeat_interval"
+                                                    );
+                                                    spawn_heartbeat(events, gen, interval);
+                                                    websocket_client.send_text(
+                                                        ws,
+                                                        proto.identify(opts.token)
+                                                    );
+                                                    identified = true;
+                                                } else if (f.op == 0 && f.t == "MESSAGE_CREATE") {
+                                                    seq = f.seq;
+                                                    let channel = proto.d_string(f.d, "channel");
+                                                    let author = proto.d_string(f.d, "author");
+                                                    let content = proto.d_string(f.d, "content");
+                                                    match (commands.handle(
+                                                        bot,
+                                                        channel,
+                                                        author,
+                                                        content
+                                                    )) {
+                                                        Option.Some(text_out) => {
+                                                            websocket_client.send_text(
+                                                                ws,
+                                                                proto.reply(channel, text_out)
+                                                            );
+                                                        },
+                                                        Option.None => { },
+                                                    }
+                                                    stats.dispatches = stats.dispatches + 1;
+                                                    if (opts.max_dispatches > 0 && stats.dispatches >= opts.max_dispatches) {
+                                                        running = false;
+                                                    }
+                                                } else if (f.op == 11) {
+                                                    // heartbeat ACK: alive.
+                                                } else if (f.op == 0 && f.t == "READY") {
+                                                    eprint(
+                                                        "raybot: ready (gen " + to_string(gen) + ")"
+                                                    );
+                                                }
+                                            },
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    }
+                }
+                websocket_client.close_ws(ws);
+            },
+        }
+    }
+    Result.Ok(stats)
+}

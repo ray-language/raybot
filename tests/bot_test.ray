@@ -1,0 +1,79 @@
+// End-to-end over a real websocket: identify, heartbeats, dispatch → command
+// → reply, per-channel SQLite state, and RECONNECTION after a gateway drop.
+// One @test (zombie listeners between tests).
+import std/fs;
+import std/time;
+import client;
+import gateway;
+import commands;
+
+@test
+fn bot_end_to_end_with_reconnect() {
+    fs.remove_file("/tmp/raybot_test.db");
+    // Gateway that DROPS the connection after the first dispatch; the script
+    // replays on each new connection.
+    let script = [
+        gateway.Scripted { channel: "c1", author: "ana", content: "!count", delay_ms: 120 },
+        gateway.Scripted { channel: "c1", author: "eva", content: "!ping", delay_ms: 120 }
+    ];
+    let gw = match (gateway.start(0, 100, script, 1)) {
+        Result.Ok(g) => g,
+        Result.Err(e) => panic(e),
+    };
+    // close_after=1 drops EVERY connection after its first dispatch, so the
+    // 3 dispatches are three !count (one per connection) and the counter
+    // proves SQLite state survives each reconnect.
+    let stats = match (client.run(
+        client.RunOpts {
+            host: "127.0.0.1",
+            port: gw.port,
+            path: "/",
+            token: "tok-123",
+            db_path: "/tmp/raybot_test.db",
+            max_dispatches: 3
+        }
+    )) {
+        Result.Ok(st) => st,
+        Result.Err(e) => panic(e),
+    };
+    assert_eq(stats.dispatches, 3);
+    assert(stats.reconnects >= 2);
+    assert(stats.heartbeats >= 2);
+    // Both connections identified with the token.
+    match (recv(gw.identified)) {
+        Option.Some(tok) => assert_eq(tok, "tok-123"),
+        Option.None => panic("no identify"),
+    }
+    match (recv(gw.identified)) {
+        Option.Some(tok) => assert_eq(tok, "tok-123"),
+        Option.None => panic("no second identify"),
+    }
+    var seen: [string] = [];
+    var i = 0;
+    while (i < 3) {
+        match (recv(gw.replies)) {
+            Option.Some(line) => {
+                seen.push(line);
+            },
+            Option.None => panic("missing reply"),
+        }
+        i = i + 1;
+    }
+    assert(seen.contains("c1\tana: 1"));
+    assert(seen.contains("c1\tana: 2"));
+    assert(seen.contains("c1\tana: 3"));
+
+    // The command layer alone: unknown command and echo.
+    let bot = match (commands.new_bot("/tmp/raybot_test.db")) {
+        Result.Ok(b) => b,
+        Result.Err(e) => panic(e),
+    };
+    match (commands.handle(bot, "c9", "x", "!nada")) {
+        Option.Some(r) => assert(r.contains("desconocido")),
+        Option.None => panic("expected reply"),
+    }
+    match (commands.handle(bot, "c9", "x", "charla normal")) {
+        Option.None => { },
+        Option.Some(r) => panic("chatter must not reply"),
+    }
+}
