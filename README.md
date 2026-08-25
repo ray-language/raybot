@@ -1,6 +1,6 @@
 # raybot
 
-Framework de bots sobre **websocket de larga vida**, escrito en [raylang](https://github.com/roberto-ayala/raylang). Es el estreno de `websocket_client`: un cliente de gateway estilo Discord (HELLO → IDENTIFY → heartbeats por intervalo → dispatches) con **reconexión automática** (backoff exponencial, re-IDENTIFY) y comandos con estado en SQLite que sobrevive a las caídas. Incluye un **gateway falso** (servidor `net/websocket`) para desarrollar y testear el bot entero sin tocar Discord.
+Framework de bots sobre **websocket de larga vida**, escrito en [raylang](https://github.com/ray-language/raylang). Es el estreno de `websocket_client`: un cliente de gateway estilo Discord (HELLO → IDENTIFY → heartbeats por intervalo → dispatches) con **reconexión automática** (backoff exponencial, re-IDENTIFY) y comandos con estado en SQLite que sobrevive a las caídas. Incluye un **gateway falso** (servidor `net/websocket`) para desarrollar y testear el bot entero sin tocar Discord.
 
 ```text
 $ raybot demo            # gateway falso + bot, todo local
