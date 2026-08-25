@@ -18,14 +18,15 @@ Comandos de serie: `!ping` · `!count` (contador por canal en SQLite) ·
 
 ## Arquitectura (la parte interesante)
 
-Un solo canal de eventos multiplexa todo — `select` exige canales del mismo
-tipo y no hay `try_recv` (hallazgo de rayrelay §64), así que:
+Un solo canal de eventos multiplexa todo:
 
 - una fibra lectora empuja `In(gen, frame)`;
-- la fibra de heartbeat empuja `Tick(gen)` cada intervalo;
+- la fibra de heartbeat empuja `Tick(gen)` cada intervalo — y es MATABLE
+  (raylang M116.1): late con `select_timeout([stop], interval)` y una
+  reconexión cierra su canal `stop`, así que la huérfana muere en vez de
+  latir el resto de la vida del proceso;
 - el bucle principal es el ÚNICO que escribe al socket, y descarta los ticks
-  de generaciones muertas (las fibras de heartbeat huérfanas de reconexiones
-  pasadas laten inofensivamente).
+  de generaciones muertas (defensa en profundidad).
 
 Reconexión probada de verdad: el test usa un gateway que **corta la conexión
 tras cada dispatch** — el bot reconecta (gen 1→2→3), re-identifica con el
@@ -52,11 +53,10 @@ Anotados en `raylang/IDEAS.md` §72:
 1. **`websocket_client` + `net/websocket` (servidor) funcionan a la primera**
    en su estreno conjunto — handshake, framing enmascarado/no, ping/pong
    automático en `read_message`.
-2. El patrón generación-en-el-canal es el workaround estándar para "no puedo
-   matar una fibra dormida" (sin try_recv/select-timeout, §64): las fibras
-   huérfanas laten a un canal que las ignora. Funciona, pero cada reconexión
-   deja una fibra durmiente — un `Timer` cancelable o un select con timeout
-   lo eliminaría.
+2. **[RESUELTO — raylang M116.1]** "No puedo matar una fibra dormida": con
+   `select_timeout` el heartbeat late por plazo y muere por canal (close del
+   `stop` de su generación) — cero fibras huérfanas acumulándose en procesos
+   de semanas.
 
 ## Desarrollo
 

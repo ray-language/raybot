@@ -1,11 +1,12 @@
 // raybot — the gateway client: the days-long connection the catalog wanted.
 //
-// One event channel multiplexes everything (select needs same-typed channels
-// and there is no try_recv — the rayrelay finding): a reader fiber pushes
-// incoming frames, a heartbeat fiber pushes ticks stamped with a connection
-// GENERATION (a tick from a dead connection is ignored — stale heartbeat
-// fibers from before a reconnect keep ticking harmlessly), and the main loop
-// owns every socket WRITE. Reconnection: exponential backoff with a cap.
+// One event channel multiplexes everything: a reader fiber pushes incoming
+// frames, a heartbeat fiber pushes ticks stamped with a connection GENERATION,
+// and the main loop owns every socket WRITE. Since raylang M116.1 the
+// heartbeat fiber is KILLABLE (select_timeout on a per-generation stop
+// channel): a reconnect closes the old stop channel and the orphan dies —
+// no more stale fibers ticking for the life of the process (the recorded
+// finding, resolved). Reconnection: exponential backoff with a cap.
 import std/time;
 import std/json;
 from std/json import Json;
@@ -52,12 +53,18 @@ fn spawn_reader(ws: websocket.WsConn, events: Channel<Ev>, gen: int) {
     });
 }
 
-fn spawn_heartbeat(events: Channel<Ev>, gen: int, interval_ms: int) {
+fn spawn_heartbeat(events: Channel<Ev>, gen: int, interval_ms: int, stop: Channel<int>) {
     spawn(fn() {
         var beating = true;
         while (beating) {
-            time.sleep(interval_ms);
-            send(events, Ev.Tick(gen));
+            // select_timeout (raylang M116.1): tictac por PLAZO, muerte por canal — un canal
+            // cerrado queda "listo", asi que close(stop) despierta y mata a la fibra.
+            match (select_timeout([stop], interval_ms)) {
+                Option.Some(_i) => {
+                    beating = false;
+                },
+                Option.None => send(events, Ev.Tick(gen)),
+            }
         }
     });
 }
@@ -70,8 +77,12 @@ pub fn run(opts: RunOpts) -> Result<RunStats, string> {
     var gen = 0;
     var backoff = 500;
     var running = true;
+    var hb_stop: Channel<int> = Channel.bounded(1);
     while (running) {
         gen = gen + 1;
+        // Mata el heartbeat de la generacion anterior (si lo hubo) y estrena canal de stop.
+        close(hb_stop);
+        hb_stop = Channel.bounded(1);
         match (websocket_client.connect(
         opts.host,
         opts.port,
@@ -126,7 +137,7 @@ pub fn run(opts: RunOpts) -> Result<RunStats, string> {
                                                         f.d,
                                                         "heartbeat_interval"
                                                     );
-                                                    spawn_heartbeat(events, gen, interval);
+                                                    spawn_heartbeat(events, gen, interval, hb_stop);
                                                     websocket_client.send_text(
                                                         ws,
                                                         proto.identify(opts.token)
