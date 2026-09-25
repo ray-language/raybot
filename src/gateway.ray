@@ -96,9 +96,7 @@ fn serve_conn(
     var seq = 0;
     var running = true;
     while (running) {
-        match (websocket.read_message(
-        ws
-    )) {
+        match (websocket.read_message(ws)) {
             Result.Err(e) => {
                 running = false;
             },
@@ -110,9 +108,7 @@ fn serve_conn(
                         Result.Ok(s) => s,
                         Result.Err(e) => "",
                     };
-                    match (proto.parse_frame(
-                text
-            )) {
+                    match (proto.parse_frame(text)) {
                         Option.None => { },
                         Option.Some(f) => {
                             if (f.op == 2) {
@@ -147,7 +143,9 @@ fn serve_conn(
                             } else if (f.op == 100) {
                                 send(
                                     replies,
-                                    proto.d_string(f.d, "channel") + "\t" + proto.d_string(f.d, "content")
+                                    proto.d_string(f.d, "channel")
+                                        + "\t"
+                                        + proto.d_string(f.d, "content")
                                 );
                             }
                         },

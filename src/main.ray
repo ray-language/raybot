@@ -57,12 +57,14 @@ fn main() -> int {
             db_path: flag_str(av, "--db", "./raybot.db"),
             max_dispatches: flag_int(av, "--max", 0)
         };
-        match (client.run(
-    opts
-)) {
+        match (client.run(opts)) {
             Result.Ok(st) => {
                 eprint(
-                    "raybot: done (" + to_string(st.dispatches) + " dispatches, " + to_string(st.heartbeats) + " heartbeats)"
+                    "raybot: done ("
+                        + to_string(st.dispatches)
+                        + " dispatches, "
+                        + to_string(st.heartbeats)
+                        + " heartbeats)"
                 );
                 0
             },
