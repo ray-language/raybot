@@ -83,11 +83,7 @@ pub fn run(opts: RunOpts) -> Result<RunStats, string> {
         // Mata el heartbeat de la generacion anterior (si lo hubo) y estrena canal de stop.
         close(hb_stop);
         hb_stop = Channel.bounded(1);
-        match (websocket_client.connect(
-        opts.host,
-        opts.port,
-        opts.path
-    )) {
+        match (websocket_client.connect(opts.host, opts.port, opts.path)) {
             Result.Err(e) => {
                 eprint(
                     "raybot: connect failed (" + e + "), retrying in " + to_string(backoff) + " ms"
@@ -103,9 +99,7 @@ pub fn run(opts: RunOpts) -> Result<RunStats, string> {
                 var connected = true;
                 var identified = false;
                 while (connected && running) {
-                    match (recv(
-                    events
-                )) {
+                    match (recv(events)) {
                         Option.None => {
                             connected = false;
                             running = false;
@@ -127,9 +121,7 @@ pub fn run(opts: RunOpts) -> Result<RunStats, string> {
                                 },
                                 Ev.In(g, text) => {
                                     if (g == gen) {
-                                        match (proto.parse_frame(
-                                    text
-                                )) {
+                                        match (proto.parse_frame(text)) {
                                             Option.None => { },
                                             Option.Some(f) => {
                                                 if (f.op == 10) {
@@ -163,7 +155,8 @@ pub fn run(opts: RunOpts) -> Result<RunStats, string> {
                                                         Option.None => { },
                                                     }
                                                     stats.dispatches = stats.dispatches + 1;
-                                                    if (opts.max_dispatches > 0 && stats.dispatches >= opts.max_dispatches) {
+                                                    if (opts.max_dispatches > 0
+                                                        && stats.dispatches >= opts.max_dispatches) {
                                                         running = false;
                                                     }
                                                 } else if (f.op == 11) {
