@@ -7,6 +7,7 @@
 // channel): a reconnect closes the old stop channel and the orphan dies —
 // no more stale fibers ticking for the life of the process (the recorded
 // finding, resolved). Reconnection: exponential backoff with a cap.
+import std/net;
 import std/time;
 import std/json;
 from std/json import Json;
@@ -38,14 +39,11 @@ pub struct RunOpts {
 
 fn spawn_reader(ws: websocket.WsConn, events: Channel<Ev>, gen: int) {
     spawn(fn() {
-        var running = true;
-        while (running) {
+        while (true) {
             match (websocket_client.recv_text(ws)) {
-                Result.Ok(text) => {
-                    send(events, Ev.In(gen, text));
-                },
+                Result.Ok(text) => send(events, Ev.In(gen, text)),
                 Result.Err(e) => {
-                    running = false;
+                    break;
                 },
             }
         }
@@ -55,13 +53,12 @@ fn spawn_reader(ws: websocket.WsConn, events: Channel<Ev>, gen: int) {
 
 fn spawn_heartbeat(events: Channel<Ev>, gen: int, interval_ms: int, stop: Channel<int>) {
     spawn(fn() {
-        var beating = true;
-        while (beating) {
+        while (true) {
             // select_timeout (raylang M116.1): tictac por PLAZO, muerte por canal — un canal
             // cerrado queda "listo", asi que close(stop) despierta y mata a la fibra.
             match (select_timeout([stop], interval_ms)) {
                 Option.Some(_i) => {
-                    beating = false;
+                    break;
                 },
                 Option.None => send(events, Ev.Tick(gen)),
             }
@@ -94,6 +91,10 @@ pub fn run(opts: RunOpts) -> Result<RunStats, string> {
             },
             Result.Ok(ws) => {
                 backoff = 500;
+                // A days-long, chatty connection: the kernel reports a vanished peer (keepalive)
+                // and small frames (heartbeats, replies) are not held back by Nagle (nodelay).
+                net.set_keepalive(ws.conn, true);
+                net.set_nodelay(ws.conn, true);
                 spawn_reader(ws, events, gen);
                 var seq = 0;
                 var connected = true;

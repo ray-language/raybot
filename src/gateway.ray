@@ -23,22 +23,14 @@ pub struct Gateway {
 
 fn read_upgrade(h: int) -> Result<string, string> {
     var buf = b"";
-    while (true) {
-        match (from_utf8(buf)) {
-            Result.Ok(s) => {
-                if (s.contains("\r\n\r\n")) {
-                    return Result.Ok(s);
-                }
-            },
-            Result.Err(e) => { },
-        }
+    while (buf.index_of(b"\r\n\r\n").is_none()) {
         let chunk = net.socket_read_bytes(h)?;
         if (chunk.len() == 0) {
             return Result.Err("closed during handshake");
         }
         buf = buf + chunk;
     }
-    Result.Err("unreachable")
+    from_utf8(buf)
 }
 
 fn send_text_frame(h: int, text: string) {
@@ -56,11 +48,10 @@ pub fn start(
     let replies: Channel<string> = Channel.bounded(64);
     let identified: Channel<string> = Channel.bounded(8);
     spawn(fn() {
-        var accepting = true;
-        while (accepting) {
+        while (true) {
             match (net.tcp_accept(listener)) {
                 Result.Err(e) => {
-                    accepting = false;
+                    break;
                 },
                 Result.Ok(h) => {
                     spawn(fn() {
@@ -93,16 +84,14 @@ fn serve_conn(
     }
     let ws = websocket.server_conn(h);
     send_text_frame(h, proto.hello(heartbeat_ms));
-    var seq = 0;
-    var running = true;
-    while (running) {
+    while (true) {
         match (websocket.read_message(ws)) {
             Result.Err(e) => {
-                running = false;
+                break;
             },
             Result.Ok(frame) => {
                 if (frame.opcode == websocket.op_close()) {
-                    running = false;
+                    break;
                 } else if (frame.opcode == websocket.op_text()) {
                     let text = match (from_utf8(frame.payload)) {
                         Result.Ok(s) => s,
@@ -113,7 +102,7 @@ fn serve_conn(
                         Option.Some(f) => {
                             if (f.op == 2) {
                                 send(identified, proto.d_string(f.d, "token"));
-                                send_text_frame(h, proto.dispatch("READY", 0, std_null()));
+                                send_text_frame(h, proto.dispatch("READY", 0, json.Json.JNull));
                                 // Replay the script in its own fiber so the
                                 // read loop keeps ACKing heartbeats.
                                 spawn(fn() {
@@ -155,8 +144,4 @@ fn serve_conn(
         }
     }
     close(h);
-}
-
-fn std_null() -> json.Json {
-    json.Json.JNull
 }
