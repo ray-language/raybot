@@ -27,6 +27,9 @@ Un solo canal de eventos multiplexa todo:
   latir el resto de la vida del proceso;
 - el bucle principal es el ÚNICO que escribe al socket, y descarta los ticks
   de generaciones muertas (defensa en profundidad).
+- el socket del gateway lleva `SO_KEEPALIVE` (el kernel detecta un peer
+  desaparecido y la fibra lectora dispara la reconexión) y `TCP_NODELAY`
+  (heartbeats y respuestas salen sin la espera de Nagle).
 
 Reconexión probada de verdad: el test usa un gateway que **corta la conexión
 tras cada dispatch** — el bot reconecta (gen 1→2→3), re-identifica con el
@@ -44,7 +47,7 @@ token, y el contador de `!count` sigue 1, 2, 3 a través de las caídas
 | Binario nativo | ✅ |
 | Tests (E2E con reconexión) | ✅ 1 |
 | Adaptador Discord real (wss + REST para responder, intents) | 📋 v2 |
-| Detección de socket muerto por ACK perdido (zombie connection) | 📋 v2 |
+| Detección de socket muerto: keepalive del SO ✅ · por ACK perdido (zombie connection) | 📋 v2 |
 
 ## Hallazgos de dogfood
 
@@ -59,6 +62,11 @@ Anotados en `raylang/IDEAS.md` §72:
    de semanas.
 
 ## Desarrollo
+
+Requiere raylang 1.27+. Las dependencias vienen del registro de paquetes
+(`net = "^0.3.5"`, `db = "^0.1.0"` en `ray.toml`, fijadas en `ray.lock`);
+`ray test`/`ray run` las descargan solas. net 0.3.x enmascara las tramas del
+cliente websocket con el CSPRNG.
 
 ```sh
 ray test

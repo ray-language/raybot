@@ -1,6 +1,6 @@
 // raybot — a bot framework: websocket gateway client with heartbeats and
 // reconnection, plus a fake local gateway for offline demos.
-import std/time;
+import std/fs;
 import client;
 import gateway;
 
@@ -99,7 +99,7 @@ fn main() -> int {
                     port: gw.port,
                     path: "/",
                     token: "demo",
-                    db_path: "/tmp/raybot-demo.db",
+                    db_path: fs.temp_dir() + "/raybot-demo.db",
                     max_dispatches: 4
                 }
             );
