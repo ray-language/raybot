@@ -42,9 +42,7 @@ fn spawn_reader(ws: websocket.WsConn, events: Channel<Ev>, gen: int) {
         while (true) {
             match (websocket_client.recv_text(ws)) {
                 Result.Ok(text) => send(events, Ev.In(gen, text)),
-                Result.Err(e) => {
-                    break;
-                },
+                Result.Err(_) => break,
             }
         }
         send(events, Ev.Closed(gen));
@@ -57,9 +55,7 @@ fn spawn_heartbeat(events: Channel<Ev>, gen: int, interval_ms: int, stop: Channe
             // select_timeout (raylang M116.1): tictac por PLAZO, muerte por canal — un canal
             // cerrado queda "listo", asi que close(stop) despierta y mata a la fibra.
             match (select_timeout([stop], interval_ms)) {
-                Option.Some(_i) => {
-                    break;
-                },
+                Option.Some(_) => break,
                 Option.None => send(events, Ev.Tick(gen)),
             }
         }

@@ -63,8 +63,8 @@ Anotados en `raylang/IDEAS.md` §72:
 
 ## Desarrollo
 
-Requiere raylang 1.27+. Las dependencias vienen del registro de paquetes
-(`net = "^0.3.5"`, `db = "^0.1.0"` en `ray.toml`, fijadas en `ray.lock`);
+Requiere raylang 1.27.13+. Las dependencias vienen del registro de paquetes
+(`net = "^0.3.7"`, `db = "^0.1.1"` en `ray.toml`, fijadas en `ray.lock`);
 `ray test`/`ray run` las descargan solas. net 0.3.x enmascara las tramas del
 cliente websocket con el CSPRNG.
 

@@ -40,55 +40,43 @@ pub fn parse_frame(text: string) -> Option<Incoming> {
     }
 }
 
-fn wrap(op: int, d: Json) -> string {
-    var m: Map<string, Json> = Map.new();
-    m.insert("op", Json.JNum(op as float));
-    m.insert("d", d);
-    json.stringify(Json.JObject(m))
+// The envelope every frame shares; the caller adds `d`: a nested `json.obj()`, a number,
+// or a `Json` value such as `Json.JNull` (`Json` implements `ToJson` since raylang 1.27.13).
+fn frame(op: int) -> json.Obj {
+    json.obj().field("op", op)
+}
+
+fn event(t: string, seq: int) -> json.Obj {
+    frame(0).field("t", t).field("s", seq)
 }
 
 pub fn hello(interval_ms: int) -> string {
-    var d: Map<string, Json> = Map.new();
-    d.insert("heartbeat_interval", Json.JNum(interval_ms as float));
-    wrap(10, Json.JObject(d))
+    frame(10).field("d", json.obj().field("heartbeat_interval", interval_ms)).render()
 }
 
 pub fn identify(token: string) -> string {
-    var d: Map<string, Json> = Map.new();
-    d.insert("token", Json.JStr(token));
-    wrap(2, Json.JObject(d))
+    frame(2).field("d", json.obj().field("token", token)).render()
 }
 
 pub fn heartbeat(seq: int) -> string {
-    wrap(1, Json.JNum(seq as float))
+    frame(1).field("d", seq).render()
 }
 
 pub fn ack() -> string {
-    wrap(11, Json.JNull)
+    frame(11).field("d", Json.JNull).render()
 }
 
 pub fn dispatch(t: string, seq: int, d: Json) -> string {
-    var m: Map<string, Json> = Map.new();
-    m.insert("op", Json.JNum(0.0));
-    m.insert("t", Json.JStr(t));
-    m.insert("s", Json.JNum(seq as float));
-    m.insert("d", d);
-    json.stringify(Json.JObject(m))
+    event(t, seq).field("d", d).render()
 }
 
 pub fn message_create(seq: int, channel: string, author: string, content: string) -> string {
-    var d: Map<string, Json> = Map.new();
-    d.insert("channel", Json.JStr(channel));
-    d.insert("author", Json.JStr(author));
-    d.insert("content", Json.JStr(content));
-    dispatch("MESSAGE_CREATE", seq, Json.JObject(d))
+    let d = json.obj().field("channel", channel).field("author", author).field("content", content);
+    event("MESSAGE_CREATE", seq).field("d", d).render()
 }
 
 pub fn reply(channel: string, content: string) -> string {
-    var d: Map<string, Json> = Map.new();
-    d.insert("channel", Json.JStr(channel));
-    d.insert("content", Json.JStr(content));
-    wrap(100, Json.JObject(d))
+    frame(100).field("d", json.obj().field("channel", channel).field("content", content)).render()
 }
 
 pub fn d_string(d: Json, key: string) -> string {

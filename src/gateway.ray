@@ -50,9 +50,7 @@ pub fn start(
     spawn(fn() {
         while (true) {
             match (net.tcp_accept(listener)) {
-                Result.Err(e) => {
-                    break;
-                },
+                Result.Err(_) => break,
                 Result.Ok(h) => {
                     spawn(fn() {
                         serve_conn(h, heartbeat_ms, script, close_after, replies, identified);
@@ -86,9 +84,7 @@ fn serve_conn(
     send_text_frame(h, proto.hello(heartbeat_ms));
     while (true) {
         match (websocket.read_message(ws)) {
-            Result.Err(e) => {
-                break;
-            },
+            Result.Err(_) => break,
             Result.Ok(frame) => {
                 if (frame.opcode == websocket.op_close()) {
                     break;
